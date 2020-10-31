@@ -55,7 +55,7 @@ typedef StatusLed<PWR_LED_PIN> PwrLed;
 PwrLed pwrLed;
 Hal hal;
 
-DEFREGISTER(UReg0, MASTERID_REGS, DREG_LOWBATLIMIT, 0x20, 0x21)
+DEFREGISTER(UReg0, MASTERID_REGS, DREG_LOWBATLIMIT, 0x19, 0x20, 0x21)
 class UList0 : public RegList0<UReg0> {
   public:
     UList0 (uint16_t addr) : RegList0<UReg0>(addr) {}
@@ -67,10 +67,14 @@ class UList0 : public RegList0<UReg0> {
       return (this->readRegister(0x20, 0) << 8) + this->readRegister(0x21, 0);
     }
 
+    uint8_t powerOffBehaviour() const { return this->readRegister(0x19, 0); }
+    bool powerOffBehaviour(uint8_t value) const { return this->writeRegister(0x19, value & 0xff); }
+
     void defaults () {
       clear();
       Sendeintervall(60);
       lowBatLimit(22);
+      powerOffBehaviour(0);
     }
 };
 
@@ -190,9 +194,9 @@ class WeatherChannel : public Channel<Hal, List1, EmptyList, List4, PEERS_PER_CH
   private:
     Ntc<NTC_SENSE_PIN, NTC_R0, NTC_B, NTC_ACTIVATOR_PIN, NTC_T0, NTC_OVERSAMPLING> ntc;
     uint8_t measurecnt;
-    bool sensOK;
+    bool sensOK, firstrun;
   public:
-    WeatherChannel () : Channel(), Alarm(5), measurecnt(0), sensOK(false) {}
+    WeatherChannel () : Channel(), Alarm(5), measurecnt(0), sensOK(false), firstrun(true) {}
     virtual ~WeatherChannel () {}
 
     void measure () {
@@ -213,10 +217,13 @@ class WeatherChannel : public Channel<Hal, List1, EmptyList, List4, PEERS_PER_CH
       measure();
       measurecnt++;
 
-      if (measurecnt * MEASURE_INTERVAL >= max(10, device().getList0().Sendeintervall())) {
+      uint16_t sendInterval = max(10, device().getList0().Sendeintervall());
+
+      if (firstrun || measurecnt * MEASURE_INTERVAL >= sendInterval) {
         msg.init(msgcnt, ntc.temperature(), device().battery().low(), flags());
         device().broadcastEvent(msg);
         measurecnt = 0;
+        firstrun = false;
       }
     }
 
@@ -256,9 +263,9 @@ class TempScDeviceType : public ChannelDevice<Hal, VirtBaseChannel<Hal, UList0>,
 
           int16_t currentTemperature = wt.weatherChannel().temperature();
 
-          //DPRINT("condTxThresholdHi  ");DDECLN(CondHi);
-          //DPRINT("condTxThresholdLo  ");DDECLN(CondLo);
-          //DPRINT("currentTemperature ");DDECLN(currentTemperature);
+          DPRINT("condTxThresholdHi  ");DDECLN(CondHi);
+          DPRINT("condTxThresholdLo  ");DDECLN(CondLo);
+          DPRINT("currentTemperature ");DDECLN(currentTemperature);
 
 
           if ( currentTemperature > (int32_t)CondHi && isAboveThreshold == false ) {
@@ -311,8 +318,9 @@ class TempScDeviceType : public ChannelDevice<Hal, VirtBaseChannel<Hal, UList0>,
 
     virtual void configChanged () {
       DeviceType::configChanged();
-      DPRINT(F("*Sendeintervall  : ")); DDECLN(this->getList0().Sendeintervall());
-      DPRINT(F("*LowBat          : ")); DDECLN(this->getList0().lowBatLimit());
+      DPRINT(F("*Sendeintervall   : ")); DDECLN(this->getList0().Sendeintervall());
+      DPRINT(F("*LowBat           : ")); DDECLN(this->getList0().lowBatLimit());
+      DPRINT(F("*PowerOffBehaviour: ")); DDECLN(this->getList0().powerOffBehaviour());
       battery().low(this->getList0().lowBatLimit());
     }
 
@@ -342,6 +350,10 @@ public:
       this->setLongPressTime(millis2ticks(5000));
     }
     else if( s == ButtonType::longreleased ) {
+      if (sdev.getList0().powerOffBehaviour() == 1)
+        sdev.scChannel().setState(true);
+      else if (sdev.getList0().powerOffBehaviour() == 2)
+        sdev.scChannel().setState(false);
       sdev.pwrChannel().setPwrState(false);
     }
     else if( s == ButtonType::longpressed ) {
