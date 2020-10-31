@@ -10,9 +10,6 @@
 
 #include <sensors/Ntc.h>
 
-// Arduino Pro mini 8 Mhz
-// Arduino pin for the config button
-#define CONFIG_BUTTON_PIN 8
 // led for device activity
 #define LED_PIN           9
 // pin for self-holding mosfet
@@ -130,6 +127,8 @@ class PWRStateChannel : public Channel<Hal, PWRSCList1, EmptyList, List4, PEERS_
       if (state == 0) {
         _delay_ms(1000);
         pinMode(PWR_HOLD_PIN, INPUT);
+        //for debugging
+        while(1){}
       }
     }
 };
@@ -263,11 +262,13 @@ class TempScDeviceType : public ChannelDevice<Hal, VirtBaseChannel<Hal, UList0>,
 
 
           if ( currentTemperature > (int32_t)CondHi && isAboveThreshold == false ) {
+            wt.led().invert(true);
             wt.scChannel().setState(true);
             isAboveThreshold = true;
           }
 
           if ( currentTemperature < (int32_t)CondLo && isAboveThreshold == true ) {
+            wt.led().invert(false);
             wt.scChannel().setState(false);
             isAboveThreshold = false;
           }
@@ -323,30 +324,37 @@ class TempScDeviceType : public ChannelDevice<Hal, VirtBaseChannel<Hal, UList0>,
 
 TempScDeviceType sdev(devinfo, 0x20);
 
-ConfigButton<TempScDeviceType> cfgBtn(sdev);
-
-class PwrBtn : public StateButton<LOW, HIGH, INPUT>  {
-private:
-  TempScDeviceType& dev;
+class ConfBtn : public ConfigButton<TempScDeviceType, LOW, HIGH, INPUT>  {
 public:
-  typedef StateButton<LOW,HIGH,INPUT> ButtonType;
-  PwrBtn (TempScDeviceType& d) : StateButton<LOW, HIGH, INPUT>(), dev(d) {
-    this->setLongPressTime(millis2ticks(1200));
+  ConfBtn (TempScDeviceType& i) : ConfigButton(i) {
+    this->setLongPressTime(millis2ticks(1000));
   }
-  virtual ~PwrBtn () {}
+  virtual ~ConfBtn () {}
 
   virtual void state (uint8_t s) {
+    uint8_t old = ButtonType::state();
     ButtonType::state(s);
-    if( s == ButtonType::longreleased ) {
-      dev.pwrChannel().setPwrState(false);
+    if( s == ButtonType::released ) {
+      this->setLongPressTime(millis2ticks(1000));
+      sdev.startPairing();
+    }
+    else if ( s == ButtonType::pressed) {
+      this->setLongPressTime(millis2ticks(5000));
+    }
+    else if( s == ButtonType::longreleased ) {
+      sdev.pwrChannel().setPwrState(false);
     }
     else if( s == ButtonType::longpressed ) {
-      pwrLed.set(LedStates::key_long);
+      if( old == ButtonType::longpressed ) {
+        sdev.reset();
+      }
+      else {
+        pwrLed.set(LedStates::key_long);
+      }
     }
   }
 };
-
-PwrBtn pwrBtn(sdev);
+ConfBtn cfgBtn(sdev);
 
 void setup () {
   pinMode(PWR_HOLD_PIN, OUTPUT);
@@ -357,11 +365,11 @@ void setup () {
   DINIT(57600, ASKSIN_PLUS_PLUS_IDENTIFIER);
   sdev.init(hal);
   hal.initBattery(60UL * 60, 22, 19);
-  buttonISR(cfgBtn, CONFIG_BUTTON_PIN);
+  //buttonISR(cfgBtn, CONFIG_BUTTON_PIN);
   sdev.scChannel().changed(true);
   sdev.pwrChannel().setPwrState(true);
 
-  buttonISR(pwrBtn, PWR_BTN_PIN);
+  buttonISR(cfgBtn, PWR_BTN_PIN);
 
   while (sdev.battery().current() == 0);
 
