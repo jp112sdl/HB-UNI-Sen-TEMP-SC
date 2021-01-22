@@ -12,16 +12,14 @@
 
 // led for device activity
 #define LED_PIN           9
-// pin for self-holding mosfet
-#define PWR_HOLD_PIN      7
 // button to switch on/off the device
-#define PWR_BTN_PIN       3
-// led pin when device is turned on
-#define PWR_LED_PIN       4
+#define CONFIG_BTN_PIN    3
 // pin to power ntc (or 0 if connected to vcc)
 #define NTC_ACTIVATOR_PIN 5
 // pin to measure ntc
 #define NTC_SENSE_PIN    A0
+
+#define RELAIS_PIN        6
 
 // temperature where ntc has resistor value of R0
 #define NTC_T0 25
@@ -51,8 +49,6 @@ const struct DeviceInfo PROGMEM devinfo = {
 };
 
 typedef AskSin<StatusLed<LED_PIN>, IrqInternalBatt, Radio<AvrSPI<10, 11, 12, 13>, 2>> Hal;
-typedef StatusLed<PWR_LED_PIN> PwrLed;
-PwrLed pwrLed;
 Hal hal;
 
 DEFREGISTER(UReg0, MASTERID_REGS, DREG_LOWBATLIMIT, 0x19, 0x20, 0x21)
@@ -128,12 +124,12 @@ class PWRStateChannel : public Channel<Hal, PWRSCList1, EmptyList, List4, PEERS_
     void setPwrState(bool s) {
       state = ( s == true ) ? 200 : 0;
       send();
-      if (state == 0) {
+     /* if (state == 0) {
         _delay_ms(1000);
         pinMode(PWR_HOLD_PIN, INPUT);
         //for debugging
         while(1){}
-      }
+      }*/
     }
 };
 
@@ -272,12 +268,14 @@ class TempScDeviceType : public ChannelDevice<Hal, VirtBaseChannel<Hal, UList0>,
             wt.led().invert(true);
             wt.scChannel().setState(true);
             isAboveThreshold = true;
+            digitalWrite(RELAIS_PIN, HIGH);
           }
 
           if ( currentTemperature < (int32_t)CondLo && isAboveThreshold == true ) {
             wt.led().invert(false);
             wt.scChannel().setState(false);
             isAboveThreshold = false;
+            digitalWrite(RELAIS_PIN, LOW);
           }
 
           set(seconds2ticks(MEASURE_INTERVAL));
@@ -331,48 +329,10 @@ class TempScDeviceType : public ChannelDevice<Hal, VirtBaseChannel<Hal, UList0>,
 };
 
 TempScDeviceType sdev(devinfo, 0x20);
-
-class ConfBtn : public ConfigButton<TempScDeviceType, LOW, HIGH, INPUT>  {
-public:
-  ConfBtn (TempScDeviceType& i) : ConfigButton(i) {
-    this->setLongPressTime(millis2ticks(1000));
-  }
-  virtual ~ConfBtn () {}
-
-  virtual void state (uint8_t s) {
-    uint8_t old = ButtonType::state();
-    ButtonType::state(s);
-    if( s == ButtonType::released ) {
-      this->setLongPressTime(millis2ticks(1000));
-      sdev.startPairing();
-    }
-    else if ( s == ButtonType::pressed) {
-      this->setLongPressTime(millis2ticks(5000));
-    }
-    else if( s == ButtonType::longreleased ) {
-      if (sdev.getList0().powerOffBehaviour() == 1)
-        sdev.scChannel().setState(true);
-      else if (sdev.getList0().powerOffBehaviour() == 2)
-        sdev.scChannel().setState(false);
-      sdev.pwrChannel().setPwrState(false);
-    }
-    else if( s == ButtonType::longpressed ) {
-      if( old == ButtonType::longpressed ) {
-        sdev.reset();
-      }
-      else {
-        pwrLed.set(LedStates::key_long);
-      }
-    }
-  }
-};
-ConfBtn cfgBtn(sdev);
+ConfigButton<TempScDeviceType> cfgBtn(sdev);
 
 void setup () {
-  pinMode(PWR_HOLD_PIN, OUTPUT);
-  digitalWrite(PWR_HOLD_PIN, HIGH);
-  pwrLed.init();
-  pwrLed.ledOn();
+  pinMode(RELAIS_PIN, OUTPUT);
 
   DINIT(57600, ASKSIN_PLUS_PLUS_IDENTIFIER);
   sdev.init(hal);
@@ -381,7 +341,7 @@ void setup () {
   sdev.scChannel().changed(true);
   sdev.pwrChannel().setPwrState(true);
 
-  buttonISR(cfgBtn, PWR_BTN_PIN);
+  buttonISR(cfgBtn, CONFIG_BTN_PIN);
 
   while (sdev.battery().current() == 0);
 
